@@ -1,0 +1,693 @@
+---
+title: 'Trabajo Final: Desarrollo Humano y competencia política en distritos peruanos 2017'
+author: "Brisa Cruz Pacheco"
+date: "2022-10-16"
+output:
+  html_document:
+    df_print: paged
+    pdf_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+```
+
+## 1. Introducción
+
+Amartya Sen define al éxito económico como la "capacidad de una nación o una región para alargar la vida de sus habitantes y elevar su calidad" (1993: 6). A través del análisis de una serie de hallazgos sociodemográficos, el autor deja ver que los indicadores de bienestar humano resultan más eficientes para evaluar enfoques y políticas económicos que medidas como el Producto Bruto Nacional. En 1990, el Programa de las Naciones Unidas para el Desarrollo (PNUD) incorpora este enfoque y establece que su medición "debe centrarse en tres elementos esenciales de la vida humana: longevidad, conocimientos y niveles decentes de vida" (PNUD 1990: 36 citado en Bedoya 2010: 281). En este modelo, el desarrollo se evalúa por su impacto o resultados concretos en una población, antes que por los factores o recursos disponibles que en teoría tendrían efectos positivos para esta. Uno de los condicionantes del desarrollo humano más señalados en la literatura académica es la disponibilidad de recursos económicos para los habitantes de un territorio y la administración estatal que lo gobierna. No obstante, la estructura institucional tiene también una importancia crucial (PNUD 2019: 24). Un factor relevante asociado con la estimulación de una gobernanza eficiente es, precisamente, la competencia política.
+
+Algunos autores han planteado un paralelo entre los mercados económicos y los democráticos en relación con el efecto de la competencia, en, por ejemplo, la administración de los impuestos y la provisión de bienes públicos (Becker, 1983, Stigler, 1972 y Wittman, 1989, 1995 en Ashworth, 2016). Se afirma que "el alcance de la competencia entre políticos (o partidos) afecta las decisiones de aquellos que se encuentren en el poder": cuando la competencia es alta, las probabilidades de reelección del gobernante electo restringen más severamente sus decisiones políticas, a diferencia de cuando se tiene una gran ventaja electoral (reflejada en la concentración del voto) (Ashworth, 2016, p. 2, traducción propia). Esta dinámica ha sido verificada también en nuestra región. Para México, a nivel municipal, Soto (2016) identifica que la competencia política influye positivamente en la provisión de bienes y servicios públicos. Para Perú, Calle (2017) encuentra el mismo efecto para el rendimiento educativo, en particular, entre distritos influenciados por la actividad minera.
+
+De esta manera, la presente investigación se plantea analizar la relación entre competencia política y desarrollo humano (aproximado a partir del IDH) a nivel distrital en el Perú. En la data consultada, este índice se desagrega en cuatro indicadores: la esperanza de vida al nacer, la tasa de población adulta con secundaria completa, el promedio de años de educación de la población mayor a 25 años y el PBI per cápita (como ingreso mensual aproximado). La competencia política, por su parte, se aproxima a través de la concentración electoral, medida con el Índice de Herfindahl-Hirschman. Como variable de control, se tomará al monto por concepto de Canon recibido por las municipalidades el año 2019.
+
+La base de datos utilizada se encuentra disponible en el sitio web oficial del PNUD, y está basada en la información del Censo Poblacional del Perú del año 2017 y 2007 (posteriormente estimado para el año 2012), llevados a cabo por el Instituto Nacional de Estadística e Informática del Perú (INEI). El indicador de concentración electoral fue tomado del informe de Infogob para las elecciones municipales del 2010. Para el análisis se tendrán en cuenta 1598 distritos con información completa en las variables estudiadas.
+
+```{r}
+library(rio)
+library(tidyverse)
+library(DescTools)
+library(car)
+library(Hmisc)
+library (dplyr)
+library(corrplot)
+library(ggplot2)
+```
+
+```{r}
+IDH_2012 = import("IDH_2012_componentes.xlsx")
+IDH_2017 = import("IDH_Componentes_2017.xlsx") %>% 
+  select(1:8) %>% 
+  rename(PSec_Completa=6)
+
+IDH = merge(x = IDH_2017, y = IDH_2012,
+      by = c("Ubigeo"),
+      x.all = TRUE) %>% 
+  select(-c(Distrito.y)) %>% 
+  rename(Distrito = Distrito.x,
+         idh = IDH)
+IDH = IDH %>%
+  mutate(EvolucionP = ((IDH$idh - IDH$idh_2012)/IDH$idh_2012)*100) %>% 
+  mutate(EvolD1 = ((IDH$Life_Expec - IDH$Life_Exp_2012)/IDH$Life_Exp_2012)*100) %>% 
+  mutate(EvolD2 = ((IDH$EducYears - IDH$EducYears_2012)/IDH$EducYears_2012)*100) %>% 
+  mutate(EvolD3 = ((IDH$PSec_Completa - IDH$PSec_Completa_2012)/IDH$PSec_Completa_2012)*100) %>% 
+  mutate(EvolD4 = ((IDH$Ingreso - IDH$Ingreso_2012)/IDH$Ingreso_2012)*100) %>% 
+  rename(Ubigeo1 = Ubigeo) 
+IDH = IDH %>%  
+  mutate(Ubigeo1 = as.numeric(Ubigeo1))
+
+# todo bien hasta acá , viva cristo rey !!
+# Ahora importamos canon
+
+Canon_2019 = import("Canon_2019.csv")
+Canon_2019 = Canon_2019 %>% 
+  mutate(Ubigeo1 = V4,
+         MontoRecibido = V6) %>%
+  select(Ubigeo1, MontoRecibido)
+
+IDH_Canon =
+  merge(x = IDH, y = Canon_2019, # Data frames u objectos a ser transformados
+      by = c("Ubigeo1"), # Columnas usadas para unir
+      all.x = TRUE)
+
+IDH_Canon = IDH_Canon %>% 
+  mutate(canon_por_habitante = MontoRecibido / Poblacion)
+
+# Todo bien hasta acá x3, gracias cristo
+# Competencia política
+elecc2014 = import("~/PUCP/2021-2/Investigación Académica/Investigación/Fuentes y material/ERM2014_Resultados_Distrital.xlsx")
+Ubigeos = import("TB_UBIGEOS.csv")
+Ubigeos = Ubigeos %>% 
+  rename(Distrito = distrito) # comparten esta variable
+
+elecc2014 = elecc2014 %>%
+  filter(!`Organización Política`%in%c("VOTOS NULOS","VOTOS EN BLANCO")) %>% 
+  mutate(P2 = `% Votos`^2) %>% 
+  group_by(Región, Provincia, Distrito) %>% 
+  summarise(IHH = sum(P2),
+            NEP = 1/sum(P2))
+
+Prueba2 = elecc2014 %>% # corrigiendo, agregando ubigeos para elecc2014
+  left_join(Ubigeos %>% rename(
+                               Provincia = provincia), by = c("Provincia","Distrito")) %>% 
+  select(Ubigeo1= ubigeo_inei, Región, Provincia, Distrito, IHH, NEP)
+
+# tudo bem x2
+
+IDH_FINAL = merge(x = IDH_Canon, y = Prueba2, # Data frames u objectos a ser transformados
+      by = c("Ubigeo1"), # Columnas usadas para unir
+      all.x = TRUE) %>% 
+  select(Ubigeo = Ubigeo1, Región, Provincia, Distrito = Distrito.x, Poblacion,
+         idh, Life_Expec, PSec_Completa, EducYears, Ingreso,idh_2012, Life_Exp_2012,
+         PSec_Completa_2012, EducYears_2012, Ingreso_2012, EvolucionP, EvolD1, EvolD2, EvolD3, EvolD4,
+         canon_por_habitante, IHH) %>% 
+  drop_na()
+
+IDH_FINAL = IDH_FINAL %>% 
+  mutate(Q_canon_por_habitante
+         = as.integer(cut(canon_por_habitante, quantile(canon_por_habitante, probs=0:5/5,
+                                                               na.rm = TRUE),
+                                 include.lowest=TRUE)))
+
+# Merge realizado con éxito
+```
+
+## 2. Análisis descriptivo de las variables
+
+A continuación, se presentará un análisis descriptivo de las tres variables estudiadas a nivel distrital en el Perú, en base a estadísticos de tendencia central, dispersión y posición. En la descripción del IDH y sus componentes, se presentarán, además, los resultados distritales agrupados por el nivel de IDH y pobreza (según las clasificaciones del PNUD y el INEI), así como su evolución entre los años 2012 y 2017.
+
+### 2.0 Población en distritos peruanos (2017)
+
+A manera de contexto, es oportuno empezar caracterizando a los distritos estudiados, en términos de población. Como puede apreciarse en las tablas de abajo, esta variable contiene datos bastante dispersos: el número total de habitantes en un distrito va de 149 (Huampara, Lima) a 1 038 495 (San Juan de Lurigancho, Lima), con lo cual el valor de la desviación estándar (49 208.27) resulta más del triple que el de la media (13 135.16). Esta dispersión también puede observarse en el hecho de que la mediana (percentil 50) corresponde al valor de 3 314. Así, la mayoría de los distritos en el país albergan a un número de habitantes menor al promedio; en concreto, de cada 5 distritos, 4 tienen 9 810 habitantes o menos. En este marco, a continuación, se abordará la segunda variable, el IDH.
+
+```{r}
+IDH_FINAL %>% 
+  summarise(Num_distritos = n(),
+            media = mean(IDH_FINAL$Poblacion), 
+            mediana = median(IDH_FINAL$Poblacion),
+            Desv_Est = sd(IDH_FINAL$Poblacion), 
+            Coef_Variacion = sd(IDH_FINAL$Poblacion)/mean(IDH_FINAL$Poblacion)*100)
+```
+
+```{r}
+IDH_quintiles = IDH_FINAL %>% 
+  mutate(Quintil_poblacion= as.integer(cut(Poblacion, 
+                                           quantile(Poblacion, probs=0:5/5, na.rm = TRUE),
+                                           include.lowest=TRUE)))
+IDH_quintiles%>%group_by(Quintil_poblacion)%>%
+  summarise(minimo=min(Poblacion), maximo=max(Poblacion),
+            media=mean(Poblacion),
+            mediana=median(Poblacion),
+            sd=sd(Poblacion), n=n())
+```
+
+### 2.1 Desarrollo humano en distritos peruanos (2017)
+
+Como puede observarse en la tabla siguiente, el IDH medio para los distritos del país se aproxima a 0.4. La distancia entre el distrito con menor puntaje (Sanagorán, La Libertad) y el de mayor puntaje (Jesús María, Lima) llama la atención (ver tabla de quintiles). Sin embargo, aún con esto, la dispersión de los datos en esta variable es considerablemente menor a la de la variable anterior (si se compara, por ejemplo, a los coeficientes de variación). La evolución representa la variación porcentual del indicador para el año 2017, respecto al año 2012. Es decir, el IDH entre los distritos estudiados habría incrementado un 23.83% de su valor inicial entre el 2012 y el 2017.
+
+```{r}
+IDH_FINAL %>% 
+  summarise(Num_distritos = n(),
+            media_IDH = mean(IDH_FINAL$idh), 
+            mediana = median(IDH_FINAL$idh),
+            Desv_Est = sd(IDH_FINAL$idh), 
+            Coef_Variacion = sd(IDH_FINAL$idh)/mean(IDH_FINAL$idh)*100,
+            Evolucion = mean(IDH_FINAL$EvolucionP))
+```
+
+En realidad, lo más llamativo -preocupante- de esta variable son los valores que toma en la mayoría de los distritos. Como se puede observar en el gráfico "índice de desarrollo humano en distritos peruanos", la distribución de los valores está más concentrada al lado izquierdo, y la mayoría de los distritos tiene un puntaje menor a 0.6. Para un análisis más detallado es preciso observar la distribución según quintiles.
+
+```{r, fig.align='center', echo=FALSE}
+IDH_FINAL %>% #gráfico idh
+  ggplot(aes(x = idh))+
+  geom_histogram(fill = 'lightblue', color = 'black',
+                 alpha = 0.5, position = 'identity')+
+  labs(title = "índice de desarrollo humano en distritos peruanos (2017)", 
+       x = "Puntaje",
+       y = "Número de distritos",
+       caption = "Fuente: Programa de Naciones Unidas para el Desarrollo (PNUD)")+ 
+  theme_bw()
+```
+
+```{r}
+
+```
+
+Analizando la tabla de quintiles, se evidencia que, en efecto, el 80% de los distritos alcanzó un puntaje igual o menor a 0.52. Los promedios de cada quintil pueden ayudar a esclarecer el panorama. Los 320 distritos peruanos con menor IDH alcanzaron, en promedio, un puntaje de 0.23. En el grupo siguiente, este indicador asciende a 0.31; y, en el que le sigue a este, a 0.37. Los dos últimos quintiles, obtuvieron un puntaje medio de 0.46 y 0.60, respectivamente. En cuanto a la variación en el tiempo, esta fue positiva en todos los grupos, pero menos significativa en el primer quintil (14.28%), con una diferencia alrededor del 8.9% respecto al siguiente. El quintil con la evolución más significativa respecto al año 2012 fue el tercero (31.12%), seguido del cuarto (28.96%).
+
+```{r}
+IDH_quintiles = IDH_quintiles %>% 
+  mutate(Quintil_idh= as.integer(cut(idh,
+                                     quantile(idh, probs=0:5/5, na.rm = TRUE),
+                                           include.lowest=TRUE)))
+IDH_quintiles%>%group_by(Quintil_idh)%>%
+  summarise(minimo=min(idh), maximo=max(idh), media=mean(idh),mediana=median(idh),
+            Evolucion=mean(EvolucionP), n=n())
+```
+
+Podemos apoyarnos en una categorización para complementar el análisis. En la siguiente tabla, los puntajes de IDH obtenidos se agrupan en cuatro categorías: "Bajo" (menor a 0.25), "Medio bajo" (igual o mayor a 0.25 y menor a 0.5), "Medio alto" (igual o mayor a 0.5 y menor a 0.75) y "Alto" (mayor a 0.75). Como señala la tabla, al 2017, 197 distritos peruanos tuvieron un IDH bajo; 1036 distritos, uno medio bajo; 350 distritos, uno medio alto; y tan solo 15 distritos, uno alto. El gráfico siguiente interpreta la misma información en términos de proporciones.
+
+```{r}
+IDH_FINAL = IDH_quintiles %>%
+  group_by(Distrito, Poblacion, idh, Life_Expec, PSec_Completa, EducYears, Ingreso, Ubigeo) %>% 
+  mutate(Nivel_IDH = case_when(idh<0.25~ 1,
+                               idh>0.25 & idh < 0.5 ~ 2,
+                               idh > 0.5 & idh < 0.75 ~ 3,
+                               TRUE ~ 4))
+etiquetas = c("Bajo", "Medio bajo", "Medio alto", "Alto") 
+IDH_FINAL = IDH_FINAL %>% 
+  mutate(Nivel_IDH = factor(Nivel_IDH,
+                            levels = c(1:4),
+                            labels = etiquetas,
+                            ordered = TRUE))
+describe(IDH_FINAL$Nivel_IDH)
+```
+
+En el gráfico "Nivel de IDH en distritos peruanos" se evidencia que los distritos con un IDH bajo representan al 12.3% del total. La mayor parte del grupo (87.7%) tuvo un puntaje clasificable en el nivel medio: 64.8%, medio bajo; y, 21.9%, medio alto. Los distritos con un IDH alto representan solamente el 0.9% del total.
+
+```{r, fig.align='center', echo=FALSE}
+Plot_nivel_IDH = as.data.frame(prop.table(table(IDH_FINAL$Nivel_IDH)))
+Plot_nivel_IDH %>% 
+  ggplot(aes(x = Var1, y = Freq))+
+  geom_bar(stat="identity", fill ="lightblue") + #le ponemos color con fill
+  labs(title = "Nivel de IDH en distritos peruanos (2017)", x = "Nivel de IDH", y = "Número de distritos",
+       caption = "Fuente: Programa de Naciones Unidas para el Desarrollo (PNUD) (2017)")+ 
+  geom_text(aes(label=scales::percent(Freq)),
+                vjust=0.5, color="black", size=3) + #Frecuencias en las barras
+  theme_bw() #cambiamos el fondo 
+```
+```{r}
+
+```
+
+Para conocer la dinámica al interior del Índice, a continuación, se presentarán, en primer lugar, los resultados del indicador de Esperanza de vida.
+
+El gráfico "Esperanza de vida en distritos peruanos" muestra que los valores tienen una distribución ligeramente más cercana a la derecha, es decir, hacia una mayor esperanza de vida. Los picos de frecuencia se encuentran en los intervalos próximos a los 80 años, aunque también se evidencian algunos distritos (al menos 100) con una esperanza de vida media menor a 60 años. Observemos las siguientes tablas para encontrar información más detallada.
+
+```{r, fig.align='center', echo=FALSE}
+IDH_FINAL %>% #gráfico esperanza de vida
+  ggplot(aes(x = Life_Expec))+
+  geom_histogram(fill = 'lightblue', color = 'black',
+                 alpha = 0.5, position = 'identity')+
+  labs(title = "Esperanza de vida en distritos peruanos (2017)", 
+       x = "Años",
+       y = "Número de distritos",
+       caption = "Fuente: Programa de Naciones Unidas para el Desarrollo (PNUD)")+ 
+  theme_bw()
+```
+
+```{r}
+
+```
+
+Según reporta la tabla resumen de la esperanza de vida, el promedio de todos distritos en este indicador alcanzó los 74.06 años al 2017, con una desviación estándar de 8.42 años. Solo en el primer quintil la esperanza de vida promedio es menor a 70 años (61.33 años), y en los grupos siguientes esta se aproxima a los 71, 75, 79 y 84 años. En esta variable, como sugería el gráfico, son los valores extremos del lado izquierdo los que más afectan al promedio. A su vez, el coeficiente de variación se acerca más a 0 que los anteriores (11.37), lo que puede explicarse también por la naturaleza de la variable. Aún con esto, resulta preocupante el retroceso de la esperanza de vida para para el primer y segundo quintil, de 6.05 y 6.05 respectivamente, que contrastas con el crecimiento de 6.36% en el último grupo.
+
+```{r}
+IDH_FINAL %>% 
+  summarise(Num_distritos = n(),
+            Esperanza_media = mean(IDH_FINAL$Life_Expec), 
+            mediana = median(IDH_FINAL$Life_Expec),
+            Desv_Est = sd(IDH_FINAL$Life_Expec), 
+            Coef_Variacion = sd(IDH_FINAL$Life_Expec)/mean(IDH_FINAL$Life_Expec)*100,
+            Evolucion = mean(IDH_FINAL$EvolD1))
+```
+
+```{r}
+IDH_quintiles = IDH_quintiles %>% 
+  mutate(Quintil_Esperanza= as.integer(cut(Life_Expec, 
+                                              quantile(Life_Expec, probs=0:5/5, na.rm = TRUE),
+                                              include.lowest=TRUE)))
+
+IDH_quintiles%>%group_by(Quintil_Esperanza)%>%
+  summarise(minimo=min(Life_Expec), maximo=max(Life_Expec), media=mean(Life_Expec),
+            mediana=median(Life_Expec),Evolucion=mean(EvolD1), n=n())
+```
+
+El primer indicador de la dimensión educativa es el porcentaje de población mayor a 25 años con secundaria completa. Hay poco más de 200 distritos que tengan al menos al 75% de su población con secundaria completa. El gráfico de esta variable sugiere una muestra que, aunque algo concentrada en lado izquierdo, a grandes rasgos, tiene una distribución normal. Pasemos a observar las tablas de resumen y de quintiles.
+
+```{r, fig.align='center', echo=FALSE}
+IDH_FINAL %>% #gráfico PSec_Completa
+  ggplot(aes(x = PSec_Completa))+
+  geom_histogram(fill = 'lightblue', color = 'black',
+                 alpha = 0.5, position = 'identity')+
+  labs(title = "Población con secundaria completa (%) en distritos peruanos (2017)", 
+       x = "% de población con secundaria completa",
+       y = "Número de distritos",
+       caption = "Fuente: Programa de Naciones Unidas para el Desarrollo (PNUD)")+ 
+  theme_bw()
+```
+
+```{r}
+
+```
+
+Resulta llamativo que, según el promedio distrital, casi 1 de cada 2 peruanos no haya concluido oportunamente la educación básica en el 2017. La mediana indica casi el mismo resultado: uno de cada dos distritos tuvo una tasa de conclusión escolar oportuna menor o igual al 54.25%, con una desviación estándar aproximada a 15.9. El promedio en los dos últimos quintiles, no obstante, asciende a 63.84 y 74.94% respectivamente. También se puede notar que el valor máximo en esta variable alcanza el 100%, tal fue el caso de Estique-Pampa en Tacna. Pero, al mismo tiempo, en el primer quintil de distritos, el promedio de población con secundaria completa desciende a menos de un tercio, 31.51%.
+
+```{r}
+IDH_FINAL %>% 
+  summarise(Num_distritos = n(),
+            media_PsecCompleta = mean(IDH_FINAL$PSec_Completa), 
+            mediana = median(IDH_FINAL$PSec_Completa),
+            Desv_Est = sd(IDH_FINAL$PSec_Completa), 
+            Coef_Variacion = sd(IDH_FINAL$PSec_Completa)/mean(IDH_FINAL$PSec_Completa)*100,
+            Evolucion = mean(IDH_FINAL$EvolD2))
+```
+
+```{r}
+IDH_quintiles = IDH_quintiles %>% 
+  mutate(Quintil_PSecCompleta= as.integer(cut(PSec_Completa, 
+                                           quantile(PSec_Completa, probs=0:5/5, na.rm = TRUE),
+                                           include.lowest=TRUE)))
+IDH_quintiles%>%group_by(Quintil_PSecCompleta)%>%
+  summarise(minimo=min(PSec_Completa), maximo=max(PSec_Completa), media=mean(PSec_Completa),
+            mediana=median(PSec_Completa), Evolucion=mean(EvolD2), n=n())
+```
+
+El segundo indicador educativo ayuda a terminar de identificar un problema dentro de esta dimensión en nuestro país, al menos, al año 2017. Para empezar, el gráfico de esta variable evidencia una distribución de los datos hacia el extremo inferior, en la cual los dos picos de frecuencia se encuentran antes de los 6 años de estudio. ¿Qué pueden decirnos las tablas de resumen y quintiles?
+
+```{r, fig.align='center', echo=FALSE}
+IDH_FINAL %>% #gráficoEducYears
+  ggplot(aes(x = EducYears))+
+  geom_histogram(fill = 'lightblue', color = 'black',
+                 alpha = 0.5, position = 'identity')+
+  labs(title = "Años de estudio de la población (+25 años) en distritos peruanos (2017)", 
+       x = "Años de estudio",
+       y = "Número de distritos",
+       caption = "Fuente: Programa de Naciones Unidas para el Desarrollo (PNUD)")+ 
+  theme_bw()
+```
+
+```{r}
+
+```
+
+La primera tabla indica que el promedio distrital de años de educación (en la población de 25 años a más) fue de 6.08, poco más de lo requerido para terminar la primaria. La situación observada desde los quintiles es aún más crítica: en 1 de cada 5 distritos peruanos, los años acumulados de educación no llegan ni siquiera al equivalente a quinto grado de primaria. En esta línea, ni siquiera a partir del percentil 80 los años acumulados a nivel distrital son equivalentes a los requeridos para terminar la secundaria. El último quintil, si bien contiene varios valores que sobre pasan los años de educación básica, solo alcanza un promedio de 9.2 años. No obstante, la evolución del indicador tampoco debe ser pasada por alto: en promedio, este se ha incrementado en 131.6%. La tabla de quintiles evidencia que tal evolución ha sido más significativa en los primeros cuatro quintiles (con menor puntaje en el último año), donde el tercer quintil ha alcanzado el incremento más -relativamente- significativo (261.36%).
+
+```{r}
+IDH_FINAL %>% 
+  summarise(Num_distritos = n(),
+            media_EducYears = mean(IDH_FINAL$EducYears), 
+            mediana = median(IDH_FINAL$EducYears),
+            Desv_Est = sd(IDH_FINAL$EducYears), 
+            Coef_Variacion = sd(IDH_FINAL$EducYears)/mean(IDH_FINAL$EducYears)*100,
+            Evolucion = mean(EvolD3))
+```
+
+```{r}
+IDH_quintiles = IDH_quintiles %>% 
+  mutate(Quintil_EducYears= as.integer(cut(EducYears, 
+                                              quantile(EducYears, probs=0:5/5, na.rm = TRUE),
+                                              include.lowest=TRUE)))
+IDH_quintiles%>%group_by(Quintil_EducYears)%>%
+  summarise(minimo=min(EducYears), maximo=max(EducYears), media=mean(EducYears),
+            mediana=median(EducYears), Evolucion=mean(EvolD3), n=n())
+
+```
+
+El cuarto y último indicador del IDH es el ingreso mensual per cápita o PBI per cápita. El gráfico de abajo indica una dispersión relativamente alta, cercana al extremo inferior. Así también, los picos de frecuencia se ubican por detrás de los 500 soles. Las tablas siguientes complementan estas observaciones.
+
+```{r, fig.align='center', echo=FALSE}
+IDH_FINAL %>% #gráfico Ingreso
+  ggplot(aes(x = Ingreso))+
+  geom_histogram(fill = 'lightblue', color = 'black',
+                 alpha = 0.5, position = 'identity')+
+  labs(title = "Ingreso mensual percápita (soles) en distritos peruanos (2017)", 
+       x = "Ingreso mensual (soles)",
+       y = "Número de distritos",
+       caption = "Fuente: Programa de Naciones Unidas para el Desarrollo (PNUD)")+ 
+  theme_bw()
+```
+
+```{r}
+
+```
+
+El promedio entre todos los distritos al año 2017 fue de 591.9 soles, con una desviación estándar de 339.6149. Si bien el coeficiente de variación (57.37554) resulta mucho menor al de la variable Población, la dispersión de los datos no es precisamente baja. Como en los casos anteriores, observar los quintiles nos aporta mayor claridad. Puede decirse, por ejemplo, que el 20% de distritos con menores ingresos generan un PBI per cápita igual o menor a 274.26 soles; a la vez que, el 20% de distritos con mayores ingresos, generan uno igual o mayor a 849.64 soles. La evolución del indicador respecto al año 2012 ha sido, en general, positiva (71.82%), pero relativamente menor en los quintiles con menos ingresos en el último año. Esta información puede ser interpretada también en términos de pobreza.
+
+```{r}
+IDH_FINAL %>% 
+  summarise(Num_distritos = n(),
+            media_IngresoPC = mean(IDH_FINAL$Ingreso), 
+            mediana = median(IDH_FINAL$Ingreso),
+            Desv_Est = sd(IDH_FINAL$Ingreso), 
+            Coef_Variacion = sd(IDH_FINAL$Ingreso)/mean(IDH_FINAL$Ingreso)*100,
+            Evolucion = mean(EvolD4))
+```
+
+```{r}
+IDH_quintiles = IDH_quintiles %>% 
+  mutate(Quintil_Ingreso= as.integer(cut(Ingreso, 
+                                           quantile(Ingreso, probs=0:5/5, na.rm = TRUE),
+                                           include.lowest=TRUE)))
+IDH_quintiles%>%group_by(Quintil_Ingreso)%>%
+  summarise(minimo=min(Ingreso), maximo=max(Ingreso), media=mean(Ingreso),
+            mediana=median(Ingreso), Evolucion=mean(EvolD4), n=n())
+```
+
+La tabla de abajo, para terminar con esta sección, presenta los distritos agrupados según su nivel de pobreza, de acuerdo con la clasificación del INEI (2017), para el año 2017. Se considera pobres a todos los distritos que hayan alcanzado un ingreso per cápita menor a 338 soles, y la pobreza extrema describe la situación de los distritos con un ingreso per cápita menor a 183 soles. A partir de esta variable puede decirse que, para el año 2017, 469 distritos peruanos estaban dentro de la línea de pobreza, de los cuales 98 calificaron como pobres extremos.
+
+```{r}
+IDH_pobreza = IDH_FINAL %>%
+  group_by(Distrito, Poblacion, idh, Life_Expec, PSec_Completa, EducYears, Ingreso, Ubigeo) %>% 
+  mutate(Pobreza = case_when(Ingreso < 183 ~ 'Pobre extremo',
+                             Ingreso >= 183 & Ingreso < 338 ~ 'Pobre',
+                                            TRUE ~ 'No pobre')) %>% 
+  ungroup() %>% 
+  group_by(Ubigeo, Región, Provincia, Distrito, Poblacion, idh, Life_Expec, PSec_Completa,
+           EducYears, Ingreso, Pobreza) %>% 
+  summarise(n()) 
+
+IDH_pobreza=IDH_pobreza %>% mutate (Pobreza=factor(Pobreza)) 
+describe(IDH_pobreza$Pobreza)
+```
+
+El gráfico evidencia con mayor claridad los resultados en términos relativos. Alrededor del 23% de los distritos se encontraba en pobreza y, el 6%, en pobreza extrema. En otros términos, al 2017, de cada 100 de los distritos peruanos estudiados, 29 eran pobres o pobres extremos.
+
+```{r, fig.align='center', echo=FALSE}
+Plot_Pobreza = as.data.frame(prop.table(table(IDH_pobreza$Pobreza)))
+
+Plot_Pobreza %>% 
+  ggplot(aes(x = Var1, y = Freq))+
+  geom_bar(stat="identity", fill ="lightgoldenrod1") + #le ponemos color con fill
+  labs(title = "Pobreza (%) distrital en el Perú (2017)", x = "Nivel de pobreza", y = "Número de distritos",
+       caption = "Fuente: INEI (2017)")+ 
+  geom_text(aes(label=scales::percent(Freq)), # meterle porcentajes
+            vjust=0.5, color="black", size=3) + #Frecuencias en las barras
+  theme_bw() #cambiamos el fondo 
+```
+
+```{r}
+
+```
+
+Los resultados presentados permiten aproximar cuantitativamente, a nivel agregado por distritos, al estado del desarrollo humano en el Perú para el año 2017. En términos generales, tanto el IDH como los indicadores que lo componen presentaron distribuciones heterogéneas, con coeficientes de variación que van del 11.2 al 57.4. No obstante, el mayor problema entre las variables analizadas, antes que la desigualdad, resulta el puntaje que alcanzado. Empezando por el propio IDH, el análisis a nivel distrital evidencia que 3 de cada 4 distritos peruanos se encontraba en el nivel bajo o medio bajo. De manera similar, la dimensión educativa muestra que la conclusión oportuna de la educación básica solo era mayoritaria la mitad de los distritos del país. La variación temporal (%) del índice y sus dimensiones ha sido positiva (a excepción del porcentaje de población adulta con secundaria completa). Los años de estudio en la población mayor de 25 años han sido la dimensión más (positivamente) afectada (131.6%), seguida del ingreso mensual (71.82%) y la esperanza de vida (0.96%)
+
+### 2.2 Canon recibido a nivel municipal en el Perú (2019)
+
+En la introducción se mencionó que un factor importante (aunque no el único) del desarrollo humano en un territorio es la disponibilidad de recursos económicos para sus habitantes o el órgano administrativo a su cargo. El monto recibido por Canon -impuestos sobre los ingresos por actividades económicas extractivas mineras, hidroenergénticas, gasíferas, pesqueras y forestales- es una forma de aproximar la presencia de este factor. Antes de analizar su impacto en el IDH, es importante primero caracterizar estas transferencias en términos de cantidades absolutas. Tal es el objetivo de la presente sección.
+
+Como indica la tabla resumen de esta variable, el monto medio recibido por concepto de canon es de 2 663 956 soles, mientras la mediana desciende a 499 666 soles. No sorprende, por tanto, que la desviación estándar sea de 9 356 803 soles, y el coeficiente de variación alcance la cifra de 351.24. Los quintiles ayudan a notar que, pese a la media, el 75% de distritos recibe 1 893 292 soles o menos.
+
+```{r}
+Canon_2019 %>% 
+  summarise(Distritos = n(),
+            MontoRecibido_medio = mean(Canon_2019$MontoRecibido),
+            mediana = median(Canon_2019$MontoRecibido),
+            Desv_Est = sd(Canon_2019$MontoRecibido),
+            Coef_Variacion = sd(Canon_2019$MontoRecibido)/mean(Canon_2019$MontoRecibido)*100)
+quantile(Canon_2019$MontoRecibido)
+```
+
+Un ajuste que hace más precisa la interpretación de esta variable es la división de su valor en cada caso entre el número de habitantes del mismo caso. La variable "canon por habitante" se analiza en el gráfico de abajo, excluyendo algunos valores (los 115 más grandes) con propósitos visuales. Se observa que el pico de frecuencia se ubica en el primer intervalo, y los tres picos siguientes se ubican antes (por debajo) de los 250 soles. Los valores están, como se podía inferir con los resultados de la variable anterior, bastante dispersos.
+
+```{r, fig.align='center', echo=FALSE}
+IDH_FINAL %>% #gráfico Monto por habitante
+  ggplot(aes(x = canon_por_habitante))+
+  geom_histogram(fill = 'lightgreen', color = 'black',
+                 alpha = 0.5, position = 'identity')+
+  labs(title = "      Canon recibido (soles) por habitante en distritos peruanos (2017)", 
+       x = "Canon recibido (soles) por habitante ",
+       y = "Número de distritos",
+       caption = "Fuente: Programa de Naciones Unidas para el Desarrollo (PNUD)")+ 
+  xlim(c(0, 1200))+
+  theme_bw() 
+```
+
+```{r}
+
+```
+
+El monto medio recibido por habitante corresponde a 465.53 soles, y la mediana, como es común en los grupos con datos extremos mayores, disminuye a 126.44 soles. El coeficiente de variación es algo menor al de la variable anterior y equivale a 276.62. Una mirada al interior de los quintiles advierte que el 20% de los distritos estudiados recibe 18.52 soles o menos. La media dentro de este primer quintil es 4.56 soles. La media en el quintil superior, por otro lado, asciende a los 1752.02 soles recibidos por habitante, y está acompañada de una desviación estándar de 2473.69 soles, por mucho, la mayor de todos los grupos.
+
+```{r}
+
+IDH_FINAL %>% 
+  summarise(Distritos = n(),
+            Monto_por_h_medio = mean(IDH_FINAL$canon_por_habitante, na.rm = TRUE),
+            mediana = median(IDH_FINAL$canon_por_habitante, na.rm = TRUE),
+            Desv_Est = sd(IDH_FINAL$canon_por_habitante, na.rm = TRUE),
+            Coef_Variacion = sd(IDH_FINAL$canon_por_habitante, na.rm = TRUE)
+            /mean(IDH_FINAL$canon_por_habitante, na.rm = TRUE)*100)
+
+IDH_FINAL %>% 
+  group_by(Q_canon_por_habitante)%>%
+  summarise(minimo=min(canon_por_habitante), maximo=max(canon_por_habitante), media=mean(canon_por_habitante),
+            mediana=median(canon_por_habitante),sd=sd(canon_por_habitante), n=n())
+```
+
+
+### 2.3 Competencia política en distritos peruanos (2010)
+
+La competencia política se aproxima a través del Índice de Herfindahl-Hirschman (IHH), que mide la concentración del voto en una celebración electoral. Como se explicó líneas arriba, esta variable puede ser un elemento decisivo para el desarrollo humano en un territorio. A continuación, se presentará un breve análisis descriptivo de la concentración electoral para el año 2014. Mientras mayor sea la concentración electoral, menor será la competencia política y viceversa. Los parámetros estándar para esta variable establecen que la concentración es baja si toma un valor hasta 0.15, moderada si está entre más de 0.15 y menos de 0.25, y alta si es igual o mayor a 0.25.
+
+El gráfico de abajo sugiere una muestra poco dispersa, y concentrada hacia el lado izquierdo. Los cuatro picos de frecuencia más altos están por detrás del 0.4, pero parecen ubicarse en un intervalo de concentración moderada y alta. En general, parece haber pocos distritos con una contienda electoral competitiva para el año 2014.
+
+```{r, fig.align='center', echo=FALSE}
+IDH_FINAL %>% #gráfico IHH
+  ggplot(aes(x = IHH))+
+  geom_histogram(fill = 'red', color = 'black',
+                 alpha = 0.5, position = 'identity')+
+  labs(title = "Concentración electoral (IHH) en distritos peruanos (2014)", 
+       x = "IHH",
+       y = "Distritos",
+       caption = "Fuente: Infogob (2014)")+ 
+  theme_bw() 
+
+```
+
+```{r}
+
+```
+
+Observando la tabla resumen se evidencia que en, efecto, tanto la media (0.26) como la mediana (0.25) se aproximan a una concentración electoral alta, aunque con un coeficiente de variación de 36.38. Si continuamos observando los percentiles, es posible notar que el 90% del grupo obtuvo un puntaje igual o mayor a 0.1648, lo que indica un nivel de concentración, al menos, moderado.
+
+```{r}
+IDH_FINAL %>% 
+  summarise(Distritos = n(),
+            IHH_promedio = mean(IDH_FINAL$IHH, na.rm = TRUE),
+            mediana = median(IDH_FINAL$IHH, na.rm = TRUE),
+            Desv_Est = sd(IDH_FINAL$IHH, na.rm = TRUE),
+            Coef_Variacion = sd(IDH_FINAL$IHH, na.rm = TRUE)
+            /mean(IDH_FINAL$IHH, na.rm = TRUE)*100)
+describe(IDH_FINAL$IHH)
+```
+
+## 3. Análisis bivariado
+
+A continuación, se presenta el análisis de las correlaciones entre el IDH y sus dimensiones, y las otras dos variables estudiadas, la concentración política (IHH) y el canon por habitante. Se espera encontrar que la correlación entre IDH e IHH, además de ser negativa y significativa, sea más fuerte que aquella entre el IDH y el monto de canon recibido por habitante.
+
+### 3.1 Desarrollo humano, concentración electoral y canon: análisis correlacional
+
+El gráfico posterior sugiere una correlación débil: la concentración electoral de un distrito, medida con el IHH, parece no influir en (o ser influida por) el puntaje del IDH. Los distritos con puntajes similares en el IHH se distribuyen a lo largo de todo el eje X, adoptando valores distantes en el IDH. Para corroborar estas observaciones, se analizará el test de correlación en el siguiente párrafo.
+
+```{r, fig.align='center', echo=FALSE}
+scatterplot(IDH_FINAL$idh, log(IDH_FINAL$IHH+1), 
+            main="Desarrollo humano (IDH) y concentración electoral (IHH) en distritos
+peruanos (2017)",
+            xlab="Índice de Desarrollo Humano (IDH)",
+            ylab="índice de Herfindahl-Hirschman (IHH)")
+```
+
+```{r}
+
+```
+
+Según indica el cuadro posterior, la correlación es negativa y próxima a 0 (-0.0895). No obstante, el p-valor es menor a 0.05 (0.0004), lo que permite rechazar la hipótesis nula e indica una relación -aunque débil- significativa entre las variables. 
+
+```{r}
+cor.test(IDH_FINAL$idh, IDH_FINAL$IHH)
+```
+A manera de contraste, aún queda analizar la relación entre el IDH y el canon por habitante recibido por el distrito (soles), ajustado en el monto recibido por habitante. El gráfico de esta correlación, debido al nivel de dispersión de los valores, resulta algo complicado de observar. No obstante, tampoco sugiere una relación fuerte. Analicemos ahora la prueba de correlación.
+
+```{r, fig.align='center', echo=FALSE}
+scatterplot(IDH_FINAL$idh, log(IDH_FINAL$canon_por_habitante+1), 
+            main="IDH y canon por habitante (soles) en distritos peruanos",
+            xlab="Índice de Desarrollo Humano (IDH)",
+            ylab="Canon por habitante (soles)")
+```
+
+```{r}
+
+```
+
+Como se observa en el cuadro posterior, el coeficiente de correlación es positivo y próximo a 0 (0.07). Aún con esto, sin embargo, la correlación resulta significativa (p-valor<0.05). De esta manera, no se rechaza la relación entre el IDH y el monto de canon recibido por habitante a nivel distrital, aunque esta sea más débil que aquella entre IDH y concentración electoral. En esta línea, considerando lo sugerido por la literatura, cabe poner a prueba la presencia de un impacto diferenciado en esta relación según el canon por habitante.
+
+```{r}
+cor.test(IDH_FINAL$idh, IDH_FINAL$canon_por_habitante)
+
+```
+Para responder a la cuestión anterior se analizarán los coeficientes de correlación IDH-IHH según los quintiles de canon. De acuerdo con la tabla posterior, esta es débil (menor a 0.5) en todos los quintiles, y negativa sólo en los primeros 4. El cambio en el tipo de correlación en el último quintil nos permite hacer una inferencia interesante: en distritos con mayores ingresos por concepto de canon, la competencia electoral podría vincularse con una dinámica política poco favorable al desarrollo distrital, como el rent-seeking.
+
+```{r}
+IDH_FINAL %>%
+  group_by(Q_canon_por_habitante) %>%
+  summarise(media_canon = mean(canon_por_habitante),
+            IDH_IHH = cor(idh, IHH, use = "complete.obs"),
+            media_IHH = mean(IHH),
+            Distritos=n())
+```
+
+Ahora exploremos la relación entre las variables independientes y las dimensiones del IDH. A continuación, se presenta una matriz de correlación con estas variables, que será complementada con los p-valor obtenidos en los tests de correlación.
+
+```{r}
+#Preparación
+matrizcor2017 = IDH_FINAL %>% 
+  select(Ubigeo, idh, Life_Expec, EducYears, PSec_Completa, Ingreso, IHH, canon_por_habitante)
+
+row.names(matrizcor2017) = matrizcor2017$Ubigeo
+
+matrizcor2017 = matrizcor2017[c(-1)]
+
+#ahora sí
+datamatrix = cor(matrizcor2017[,(-8)])
+corrplot(datamatrix, method="number", title = "Correlaciones IDH, IHH y canon")
+```
+```{r}
+
+```
+
+Como puede observarse a partir del gráfico superior, ninguna de las correlaciones entre las dimensiones y las variables independientes arroja un coeficiente superior a 0.2. No obstante, hay algunas diferencias por considerar.
+
+En cuanto al primer indicador del IDH, la esperanza de vida, la correlación más fuerte ocurre con el IHH (-0.05 frente al 0.02 del canon), que es, además, la única que resulta significativa, con un p-valor de 0.04477, frente al 0.3314 en el caso del canon por habitante (observar los dos primeros cuadros en la sección Anexos). Esta dinámica se repite al observar el porcentaje de población con secundaria completa. El IHH y este indicador guardan una relación negativa de 0.15, -aunque débil- la más fuerte de toda la matriz y significativa al 95% (p-valor = 8.704e-10). Mientras, en el caso del canon, la correlación es de 0.04 y no significativa (p-valor = 0.1049, no permite rechazar la hipótesis nula). Para los años de estudio en la población mayor a 25 años estas diferencias se matizan. El coeficiente de correlación con el IHH es de 0.09, mientras que con el canon de 0.08, al tiempo que ambos p-valor permiten rechazar la hipótesis nula (<0.01). Algo similar sucede en el caso del ingreso: la correlación con ambas variables se aproxima a 0.06 y resulta significativa (p-valor<0.01 para IHH y <0.05 para canon).
+
+
+### 3.2 Desarrollo humano, concentración electoral y canon: regresión lineal
+
+Por último en el análisis bivariado, se analizará la medida en la que las variables independientes afectan al puntaje del IDH en el último año, así como a su evolución (2012-2017) en los distritos peruanos estudiados (1598).
+
+En primer lugar, se presenta una regresión lineal de la relación entre IDH (2017) y competencia política (IHH). Como indica el cuadro de abajo, el puntaje de este último indicador afecta negativamente al puntaje del IDH en 0.134, y de manera significativa (p-valor<0.01). No obstante, el modelo solo explica un 0.8% de la varianza.
+
+
+```{r}
+modelo1=lm(idh~IHH, data = IDH_FINAL)
+summary(modelo1)
+
+stargazer::stargazer(modelo1, type = "text")
+```
+
+En segundo lugar, la regresión lineal de la relación entre canon por habitante (soles) e IDH (2017) arroja un coeficiente de 0.00001, que resulta significativo (p-valor<0.01). Es decir, por cada unidad de canon recibido por habitante, el IDH del distrito incrementan en 0.00001. Este modelo solo explica el 0.05% de la varianza.
+
+```{r}
+modelo2=lm(idh~canon_por_habitante, data = IDH_FINAL)
+summary(modelo1)
+stargazer::stargazer(modelo2, type = "text")
+```
+En cuanto a la evolución, el modelo de regresión lineal entre esta y el IHH, arroja un coeficiente de 10.238. No obstante, este no resulta significativo (p-valor>0.1). Es decir, no se rechaza la hipótesis nula de la influencia del IHH en el IDH.
+
+```{r}
+modelo3=lm(EvolucionP~IHH, data = IDH_FINAL)
+summary(modelo3)
+stargazer::stargazer(modelo3, type = "text")
+```
+
+En cuarto lugar, para finalizar, el modelo de regresión lineal entre la evolución del IDH y el canon por habitante arroja un coeficiente de 0.0002, que no resulta significativo (p-valor>0.1). Este modelo, asimismo, solo explica el 0.1% de la varianza. 
+
+```{r}
+modelo4=lm(EvolucionP~canon_por_habitante, data = IDH_FINAL)
+summary(modelo4)
+stargazer::stargazer(modelo4, type = "text")
+
+```
+## 4. Conclusiones
+
+La presente investigación se planteó  analizar la relación entre competencia política (concentración electoral, aproximada en el IHH) y desarrollo humano (aproximado a partir del IDH) a nivel distrital en el Perú, considerando como variable de control al monto en soles del canon por habitante recibido por las municipalidades el año 2019. Con esto, se esperaba encontrar que la correlación entre el IDH y sus dimensiones y la concentración electoral fuese negativa, significativa y más fuerte que aquella entre el IDH y el canon por habitante. El argumento que respalda esta idea es que la competencia política opera como un incentivo hacia los gobernantes para ganarse la aprobación de los ciudadanos, a través de la provisión de servicios básicos, que impactan en el bienestar de estos. Con esto se defiende también el argumento de que la disponibilidad de recursos en una municipalidad no se traduce directamente a mayores oportunidades de desarrollo para su población, sino que estas dependen más de la eficiencia de la gestión pública.
+
+Los resultados respaldan parcialmente las hipótesis de investigación. Por un lado, se encontró que la correlación entre el IDH (2017) y el IHH (2014) es negativa, significativa y mayor que la correlación entre el IDH y el canon recibido por habitante. Sin embargo, esta relación es débil (0.089). Al mismo tiempo, el análisis de regresión lineal indicó que la concentración electoral (IHH 2014) afecta negativa y significatimente el puntaje del IDH en el 2017 (0.134), pero no sucede lo mismo cuando se considera la evolución de este entre los años 2012 y 2014. De manera similar, al realizar las pruebas de correlación con las dimensiones del indicador, se encontró al IHH como significativo en cada una de estas, pero los coeficientes fueron menos a 0.16. Además, el canon por habitante arrojó resultados bastante similares (en cuanto al coeficiente y la significatividad) en las dimensiones de años de estudio e ingreso mensual individual. Adicionalmente, a partir del análisis bivariado por quintiles de canon por habitante, se encontró que la relación entre el IHH y el IDH se invierte (y se aproxima a 0.1) en el quintil superior.
+
+Es debido mencionar que este trabajo presenta importantes limitaciones metodológicas. La principal de ellas es quizá que la data de canon es dos años posterior a la de IDH, cuando, en realidad, se esperaba evaluar un efecto causal del primero sobre el segundo.
+
+## 5. Bibliografía
+
+Bases de datos 
+•	PNUD: https://www.undp.org/es/peru/publications/el-reto-de-la-igualdad
+•	InfoGob: https://infogob.jne.gob.pe/BaseDatos
+
+Bedoya, C. (2010) “Amartya Sen y el desarrollo humano”. Memorias.indb, volumen 8, número 13, pp. 277-288. https://1library.co/document/dzx609oz-amartya-sen-y-el-desarrollo-humano.html
+
+Programa de las Naciones Unidas para el Desarrollo. (2019). “El Reto de la Igualdad: Una lectura a las dinámicas territoriales en el Perú” [Informe]. https://www.pe.undp.org/content/peru/es/home/library/poverty/el-reto-de-la-igualdad.html
+
+Instituto Nacional de Estadística e Informática. INEI. https://m.inei.gob.pe/prensa/noticias/pobreza-monetaria-afecto-al-217-de-la-poblacion-del-pais-durante-el-ano-2017-10711/#:~:text=Pobres%20extremos%20son%20aquellos%20que,una%20familia%20de%20cuatro%20miembros).&text=En%20el%20a%C3%B1o%202017%2C%20el,disminuy%C3%B3%20en%200%2C2%25.
+
+Soto Zazueta, I. (2016) “El Efecto De La Competencia Política Sobre La Provisión De Bienes Públicos Locales En México”. Revista de Ciencia Política. Santiago de Chile: volumen 36, número. 3, pp. 749-772. Recuperado de: https://www.redalyc.org/pdf/324/32449207007.pdf
+
+Calle Falcón, F. (2017) ¿Maldición o bendición de los recursos naturales? Los efectos del Canon minero sobre los resultados educativos en los distritos del Perú. Tesis de licenciatura en Ciencias Sociales con mención en Economía. Lima: Pontificia Universidad Católica del Perú, Facultad de Ciencias Sociales. Recuperado de: https://tesis.pucp.edu.pe/repositorio/handle/20.500.12404/9362
+
+# Anexos: correlaciones IHH, canon y dimensiones del IDH
+
+Cuadro 1: Esperanza de vida e IHH
+```{r}
+cor.test(IDH_FINAL$Life_Expec, IDH_FINAL$IHH)
+```
+Cuadro 2: Esperanza de vida y canon por habitante
+```{r}
+cor.test(IDH_FINAL$Life_Expec, IDH_FINAL$canon_por_habitante)
+```
+Cuadro 3: % de población adulta con secundaria completa e IHH
+
+```{r}
+cor.test(IDH_FINAL$PSec_Completa, IDH_FINAL$IHH)
+```
+Cuadro 4: % de población adulta con secundaria completa y canon por habitante
+```{r}
+cor.test(IDH_FINAL$PSec_Completa, IDH_FINAL$canon_por_habitante)
+
+```
+Cuadro 5: Años de estudio en la población mayor a 25 años e IHH
+
+```{r}
+cor.test(IDH_FINAL$EducYears, IDH_FINAL$IHH)
+```
+Cuadro 6: Años de estudio en la población mayor a 25 años y canon por habitante
+```{r}
+cor.test(IDH_FINAL$EducYears, IDH_FINAL$canon_por_habitante)
+```
+Cuadro 7: Ingreso mensual o PBI per cápita e IHH
+```{r}
+cor.test(IDH_FINAL$Ingreso, IDH_FINAL$IHH)
+```
+
+Cuadro 8: Ingreso mensual o PBI per cápita y canon por habitante
+```{r}
+cor.test(IDH_FINAL$Ingreso, IDH_FINAL$canon_por_habitante)
+```
+
